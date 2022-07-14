@@ -1,0 +1,396 @@
+---
+title: "<BR><b><center>Maestría en exploración de datos y descubrimiento del conocimiento</center></b><BR><center>Trabajo práctico N°1: Análisis univariado de datos</center>"
+author: "<BR><BR><BR><center>Autor: Federico Ricardo Checozzi</center>"
+date: "<BR><center>Fecha: 14 de mayo de 2022</center><BR><BR><BR>"
+output: html_document
+header_includes: 
+  -\usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<b>Consignas
+
+1.- Para la base de datos seleccionada genere una muestra aleatoria estratificada y
+balanceada por variedad de vino de tamaño n = 2000 utilizando como semilla los
+últimos tres dígitos del DNI/PASAPORTE.</b>
+
+Se realizó un muestreo sin reemplazo de la base de datos, tomándose 1000 elementos de cada tipo de vino para realizar el muestreo estratificado y balanceado deseado. Se crearon dos dataframes con las muestras así como también un dataframe combinando ambos y con una variable categórica extra que diferencia ambos tipos de vino.
+
+```{r}
+redwine<-read.csv("winequality-red.csv", sep = ";")
+
+whitewine<-read.csv("winequality-white.csv", sep = ";")
+
+set.seed(311)
+
+redwine   <- redwine  [sample(nrow(redwine)  , size=1000, replace=FALSE),]
+whitewine <- whitewine[sample(nrow(whitewine), size=1000, replace=FALSE),]
+
+#Este dataframe almacena la combinación de ambas muestras para procesamiento futuro
+wine <- rbind(cbind(redwine, type = rep("Tinto",1000)),cbind(whitewine, type = rep("Blanco",1000)))
+```
+<b>2.- Realice un análisis estadístico de cada una de las variables numéricas para cada variedad de vino. Presente la información en forma tabular y conteniendo las siguientes medidas descriptivas:
+Cantidad de datos, mínimo, máximo, media, mediana, moda, varianza, desviación estándar, coeficiente de variación, cuartil 1, cuartil 3, rango intercuartílico, MAD, asimetría, curtosis.</b>
+
+Para presentar las estadísticas pedidas en forma tabular, se escribió una función que calcula las funciones necesarias columna a columna y las combina en la tabla deseada. Se utilizaron librerías para calcular la moda (la función mlv permite calcular varias modas, está configurada para devolver los valores más frecuentes), el coeficiente de asimetría de Fisher (adecuado para distribuciones unimodales y modales) y curtosis. Se escribió una función para coeficientes de variación también.
+
+```{r include = FALSE}
+
+cv <- function(x) {
+  sd(x)/mean(x)
+}
+
+library(moments)
+library(modeest)
+
+stats_table <- function(df) {
+  min    = sapply(df,min)
+  max    = sapply(df,max)
+  mean   = sapply(df,mean)
+  med    = sapply(df,median)
+  mode   = sapply(df,mlv,method = "mfv")
+  var    = sapply(df,var)
+  std    = sapply(df,sd)
+  cv     = sapply(df,cv)
+  q1     = sapply(df,quantile,probs = 0.25)
+  q3     = sapply(df,quantile,probs = 0.75)
+  iqr    = sapply(df,IQR)
+  mad    = sapply(df,mad)
+  skew   = sapply(df,skewness)#Fisher: https://rdrr.io/cran/moments/src/R/skewness.R
+  kurt   = sapply(df,kurtosis)
+  stats  = rbind(min,max,mean,med,mode,var,std, cv, q1, q3, iqr, mad, skew,kurt)
+}
+
+
+r_stats = stats_table(redwine)
+
+w_stats = stats_table(whitewine)
+
+```
+
+```{r echo = FALSE}
+library(knitr)
+kable(r_stats, caption = "Tabla de estadísticas del vino tinto")
+```
+```{r echo = FALSE}
+kable(w_stats, caption = "Tabla de estadísticas del vino blanco")
+```
+
+Se puede observar que hay tres valores de moda para los sulfatos del vino blanco (como están contenidos en un vector parecen arruinar el formato de la tabla).
+
+<b>3.- Represente gráficamente cada variable eligiendo el gráfico que considere apropiado. Considere la posibilidad de generar rangos de datos para su análisis y representación gráfica de las variables</b>
+
+En los gráficos de esta parte del trabajo se utilizaron dos colores parecidos a los del vino tinto y blanco, a los que se añadió cierta transparencia para facilitar la visualización:
+
+```{r}
+library(grDevices)
+#colores con transparencias, para que luzca como vino pero también para que permita comparar ambas distribuciones
+r_color = adjustcolor("deeppink4",alpha.f = 0.4)
+w_color = adjustcolor("antiquewhite", alpha = 0.4)
+c_list = c(r_color,w_color)
+```
+
+Los gráficos que parecieron más adecuados para las variables continuas de la base de datos fueron el boxplot y el histograma. El primero da una buena medida del rango de la variable y valores atípicos, mientras que el segundo permite visualizar la forma de la distribución. El boxplot discrimina entre tipos de vinos automáticamente, pero en el caso del histograma se combinó los gráficos de distintos tipos de vino para facilitar comparaciones. El número de intervalos $k$ utilizados en los histogramas fue de:
+
+$k = \lfloor 10.\log(n) \rfloor = \lfloor 10.\log(1000) \rfloor \approx 70 \text{ (Dixon-Kronmal)}$
+
+```{r}
+boxplot(fixed.acidity~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Acidez fija", ylab = "Variedad de vino")
+hist(redwine$fixed.acidity, col = r_color, xlab = "Acidez fija", ylab = "Frecuencia observada", 
+     main = "", breaks = 70)
+hist(whitewine$fixed.acidity, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(volatile.acidity~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Acidez volátil", ylab = "Variedad de vino")
+hist(redwine$volatile.acidity, col = r_color, xlab = "Acidez volátil", ylab = "Frecuencia observada", 
+     main = "Distribución acidez volátil del vino", breaks = 70)
+hist(whitewine$volatile.acidity, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(citric.acid~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Ácido cítrico", ylab = "Variedad de vino")
+hist(redwine$citric.acid, col = r_color, xlab = "Ácido cítrico", ylab = "Frecuencia observada", 
+     main = "Distribución de la cantidad de ácido cítrico del vino", breaks = 70)
+hist(whitewine$citric.acid, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+#tiene outliers, quizás usar boxplot
+boxplot(residual.sugar~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Azúcar residual", ylab = "Variedad de vino")
+hist(redwine$residual.sugar, col = r_color, xlab = "Azúcar residual", ylab = "Frecuencia observada", 
+     main = "Distribución de la cantidad de azúcar residual del vino", breaks = 70, xlim = c(0,25), ylim = c(0,300))
+hist(whitewine$residual.sugar, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(chlorides~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Cloruros", ylab = "Variedad de vino")
+hist(redwine$chlorides, col = r_color, xlab = "Cloruros", ylab = "Frecuencia observada", 
+     main = "Distribución de la cantidad de cloruros", breaks = 70)
+hist(whitewine$chlorides, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(free.sulfur.dioxide~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Anhídrido sulfuroso libre", ylab = "Variedad de vino")
+hist(redwine$free.sulfur.dioxide, col = r_color, xlab = "Anhídrido sulfuroso libre", ylab = "Frecuencia observada", 
+     main = "Distribución de anhídrido sulfuroso libre", breaks = 70, xlim = c(0,80))
+hist(whitewine$free.sulfur.dioxide, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(total.sulfur.dioxide~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Anhídrido sulfuroso total", ylab = "Variedad de vino")
+hist(redwine$total.sulfur.dioxide, col = r_color, xlab = "Anhídrido sulfuroso total", ylab = "Frecuencia observada", 
+     main = "Distribución de anhídrido sulfuroso total", breaks = 70)
+hist(whitewine$total.sulfur.dioxide, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(density~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Densidad", ylab = "Variedad de vino")
+hist(redwine$density, col = r_color, xlab = "Densidad", ylab = "Frecuencia observada", 
+     main = "Densidad", breaks = 70, xlim = c(0.985, 1.005), ylim = c(0,150))
+hist(whitewine$density, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(pH~type, data = wine, col = c_list, horizontal = TRUE, xlab = "pH", ylab = "Variedad de vino")
+hist(redwine$pH, col = r_color, xlab = "pH", ylab = "Frecuencia observada", 
+     main = "pH", breaks = 70)
+hist(whitewine$pH, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(sulphates~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Sulfatos", ylab = "Variedad de vino")
+hist(redwine$sulphates, col = r_color, xlab = "Sulfatos", ylab = "Frecuencia observada", 
+     main = "Sulfatos", breaks = 70, xlim = c(0,2))
+hist(whitewine$sulphates, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+
+boxplot(alcohol~type, data = wine, col = c_list, horizontal = TRUE, xlab = "Alcohol", ylab = "Variedad de vino")
+hist(redwine$alcohol, col = r_color, xlab = "Alcohol", ylab = "Frecuencia observada", 
+     main = "alcohol", breaks = 70)
+hist(whitewine$alcohol, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+```
+
+En el caso de calidad, la única variable discreta de la base de datos, solo se empleó un histograma (aunque en el punto 5 hay gráficos alternativos mucho mejores):
+
+```{r}
+hist(redwine$quality, col = r_color, xlab = "Calidad", ylab = "Frecuencia observada", 
+     main = "Calidad del vino", breaks = 70, ylim = c(0,500))
+hist(whitewine$quality, col = w_color, breaks = 70, add = TRUE)
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+```
+
+<b>4.- Presente una tabla de frecuencias y porcentaje para la variable calidad de vino según la variedad (tinto – blanco).</b>
+
+R genera fácilmente una tabla de frecuencias a partir de dos variables categóricas. Para crear una tabla de porcentajes basta por dividir los valores de la tabla de frecuencias en cada columna por la frecuencia marginal de su tipo de vino y multiplicar por 100.
+
+```{r}
+qualitytable <- table(wine$quality, wine$type)
+pctqualitytable <- qualitytable/apply(qualitytable,2,sum) * 100
+```
+
+```{r echo = FALSE}
+kable(qualitytable, caption = "Tabla de frecuencias")
+```
+```{r echo = FALSE}
+kable(replace(pctqualitytable, TRUE, paste(pctqualitytable,"%")), caption = "Tabla de porcentajes")
+```
+
+<b>5.- Realice un gráfico para representar la tabla construida en el punto 4.</b>
+
+La forma más natural de representar la tabla de dos variables del punto anterior es un gráfico de mosaico.
+
+```{r}
+mosaicplot(t(qualitytable),ylab = "Calidad del vino", xlab = "Tipo de vino", main = "Calidad de vino por tipo", col = rainbow(9))
+```
+
+Alternativamente, se puede realizar en base a la tabla un gráfico de barras mejorado:
+
+```{r}
+barplot(t(qualitytable), col = c_list, beside = TRUE, 
+        xlab = "Calidad del vino (medido del 0 al 10)", ylab = "Frecuencia observada")
+legend("topright",cex=1, title="Variedad",c("Tinto","Blanco"),
+       fill=c_list, horiz=F)
+```
+
+
+<b>6.- Elija dos variables continuas, establezca rangos que representen distintos niveles de cada una y defina nuevas variables categóricas. Aplique un test adecuado para entender si existe asociación entre ambas. Utilice un nivel de significación del 5%.</b>
+
+Se eligió el PH y la acidez fija con el propósito de estudiar la asociación entre ambas, ya que se esperaría una fuerte asociación entre ambas dado el rango de valores de pH (valores menores que 7 son considerados ácidos). Para crear las variables categóricas se dividieron las variables originales de forma de que aproximadamente un tercio de las observaciones correspondan a cada clase.
+
+El test adecuado para el análisis de dos variables categóricas es un test chi cuadrado de independencia. Para ello armamos una tabla de contingencia entre ambas variables, y se plantean las siguientes hipótesis:
+
+$H_0\text{: las variables son independientes}$
+
+$H_1\text{: las variables no son independientes}$
+
+
+```{r}
+wine$cat_pH <- cut(wine$pH, breaks = c(0,3.1,3.4,4), labels = c('Bastante ácido','Algo ácido','Un poco ácido'))
+wine$cat_fixed.acidity <- cut(wine$fixed.acidity, breaks = c(0,7,9,16), labels = c('Baja acidez fija','Media acidez fija','Alta acidez fija'))
+
+library(stats)
+D <- table(wine$cat_fixed.acidity,wine$cat_pH)
+
+X2 <- chisq.test(D)
+```
+```{r echo = FALSE}
+kable(as.matrix(D))
+X2
+```
+
+El p-valor obtenido es menor que 0.05, lo que es suficiente para rechazar la la hipótesis de independencia para el nivel de significación dado, de acuerdo a lo que uno esperaría.
+
+<b>7.- Seleccione otra variable continua y estime la diferencia de medias según la variedad del vino con un nivel de confianza del 95%. Interprete el resultado obtenido.</b>
+
+Se eligió para el propósito de estimar la diferencia de medias la variable "sulfatos". Es razonable asumir que ambos tipos de vinos son independientes. Dado el tamaño de la muestras, la distribución del promedio de la diferencia de medias es asintóticamente normal. Lo único que faltaría para poder empezar a armar un intervalo de confianza es saber si la varianza de ambas muestras es similar (los gráficos obtenidos en el punto 3 sugieren que no es el caso), para ello se plantea un test de varianzas a dos colas (una varianza podría ser mucho más chica o grande que la otra):
+
+```{r}
+var.test(sulphates~type, data = wine, alternative = 'two.sided')#varianzas diferentes
+```
+
+El p-valor es suficientemente bajo que podemos rechazar la similaridad entre ambas varianzas.
+
+El intervalo de confianza de la diferencia de medias será:
+
+$\left[ \left( \overline{x}-\overline{y}\right) - Z_\left(1 - \frac{\alpha}{2} \right) \sqrt{\frac{s_x^2}{n_x} + \frac{s_y^2}{n_y}} ; \left( \overline{x}-\overline{y}\right) + Z_\left(1 - \frac{\alpha}{2} \right) \sqrt{\frac{s_x^2}{n_x} + \frac{s_y^2}{n_y}} \right] \text{, con }\alpha = 1 - 0,95 = 0,05$
+
+```{r}
+r_sulphates_mean = mean(redwine$sulphates)
+w_sulphates_mean = mean(whitewine$sulphates)
+r_sulphates_var = var(redwine$sulphates)
+w_sulphates_var = var(whitewine$sulphates)
+
+lowerbound = (r_sulphates_mean - w_sulphates_mean) - qnorm(0.975) * sqrt((r_sulphates_var + w_sulphates_var)/1000)
+upperbound = (r_sulphates_mean - w_sulphates_mean) + qnorm(0.975) * sqrt((r_sulphates_var + w_sulphates_var)/1000)
+
+```
+
+```{r echo = FALSE, results = 'asis'}
+cat(paste("El intervalo de confianza de la media es: [", round(lowerbound, digits = 4), ";", round(upperbound, digits = 4), "]", sep = ""))
+```
+
+<b>8.- Según el resultado obtenido en el punto 7.- realice un test de hipótesis apropiado para determinar la diferencia de medias de la variable en estudio. Trabaje con una significación del 5%. Presente el planteo de hipótesis adecuado, la resolución y la decisión a tomar</b>
+
+El intervalo obtenido en el punto anterior (con ambos extremos positivos) sugiere probar las siguientes hipótesis:
+
+$H_0: \mu_\text{sulfatos tinto}-\mu_\text{sulfatos blanco} \le 0$
+
+$H_1: \mu_\text{sulfatos tinto}-\mu_\text{sulfatos blanco} > 0$
+
+```{r}
+t.test(sulphates~type , data = wine, alternative = "greater", conf.level = 0.95)
+
+```
+Con lo que el p-valor es suficientemente bajo para rechazar la hipótesis de que la diferencia de medias es igual o menor a cero.
+
+<b>9.- ¿Se puede afirmar que hay diferencias significativas en la calidad del vino tinto respecto al vino blanco? Elija un test de hipótesis adecuado. Trabaje con una significación del 5%.</b>
+
+Calidad es una variable numérica discreta proveniente de la mediana de al menos tres evaluaciones. Si bien en principio un test de la mediana sería lo más adecuado, debido a la falta de continuidad y que no se puede afirmar con seguridad que ambas distribuciones son iguales para aplicar el test de Mann-Whitney-Wilcoxon, es posible utilizar un test clásico si asumimos continuidad. Una extensión  de los puntajes de calidad a los números reales no es tan descabellada si uno considera que se podría haber usado evaluaciones con números decimales en vez de enteros.
+
+En este caso, teniendo en cuenta la independencia de los tipos de vino y el tamaño de muestra, basta con evaluar la homocedasticidad de ambas muestras:
+
+```{r}
+var.test(quality~type, data = wine)
+```
+(por lo que no tenemos suficiente evidencia para rechazar la homgeneidad de las varianzas) y evaluar la igualdad entre las medias de calidad de ambas muestras para ver si hay diferencias significativas entre las dos:
+
+$H_0: \mu_\text{calidad tinto} = \mu_\text{calidad blanco}$
+
+$H_1: \mu_\text{calidad tinto} \neq \mu_\text{calidad blanco}$
+
+```{r}
+t.test(quality~type, data = wine, var.equal = TRUE)#test asume homocedasticidad
+```
+
+Ese p-valor permite rechazar la hipótesis de que la calidad de ambas muestras es similar (también puede verse que la calidad del vino blanco es superior en promedio, aunque sea por un pequeño margen).
+
+Aunque no es ejecutará por un problema con las librerías y dependencias, el test de mediana se realiza de la siguiente forma:
+
+```{r eval = FALSE}
+library(RVAideMemoire)
+
+mood.medtest(quality~type, data = wine)
+```
+
+<b>10.- Decida si existen diferencias significativas en las proporciones de alcohol entre los vinos de calidad baja, media y alta. Justifique.</b>
+
+Primero se definió qué es calidad baja, media y alta (el análisis se realizará para todos los vinos juntos):
+
+$Categoría(\text{Calidad}) = \begin{cases}  \text{Calidad baja } \mspace{22mu} \text{si } 0 \le \text{Calidad} < 5 \\\text{Calidad media} \mspace{13mu} \text{si } 5\le \text{Calidad} < 7 \\\text{Calidad alta} \mspace{32mu} \text{si  } 7\le \text{Calidad} \le 10 \end{cases}$
+
+```{r}
+wine$cat_quality <- cut(as.numeric(wine$quality), breaks = c(0,5,7,10), labels = c('Calidad baja','Calidad media','Calidad alta'))
+
+```
+Las diferentes distribuciones de alcohol según el nivel de calidad sugieren que existen diferencias (también puede observarse que la calidad tiene una relación directa con la cantidad de alcohol):
+
+```{r}
+boxplot(alcohol~cat_quality,data=wine,xlab="Calidad",ylab="Alcohol", col= rainbow(3))
+```
+
+Por último debe elegirse algún test de comparación entre más de dos poblaciones, así que se revisa primero si las subdivisiones generadas tienen distribución normal:
+
+```{r}
+shapiro.test(wine[wine$cat_quality == "Calidad baja",'alcohol'])
+shapiro.test(wine[wine$cat_quality == "Calidad media",'alcohol'])
+shapiro.test(wine[wine$cat_quality == "Calidad alta",'alcohol'])
+```
+
+En todos los casos se rechaza la hipótesis de normalidad, por lo que debe hacerse el test de Kruskal-Wallis, cuyas hipótesis son:
+
+$H_0: \text{Las tres muestras provienen de poblaciones idénticas (tienen la misma calidad)}$
+
+$H_1: \text{Las tres muestras provienen de poblaciones no idénticas (tienen diferente calidad)}$
+
+```{r}
+kruskal.test(alcohol~cat_quality, data = wine)
+```
+El p-valor permite rechazar la hipótesis que las muestras vienen de poblaciones idénticas, por lo que hay diferencias significativas en la cantidad de alcohol según los niveles de calidad.
+
+Aunque no es ejecutará por un problema con las librerías y dependencias, puede hacerse comparaciones ex-post entre grupos de la siguiente forma:
+
+```{r eval = FALSE}
+library(pgirmess)
+kruskalmc(alcohol~cat_quality, data = wine)
+```
+
+<b>11.- Presente un informe final con un mínimo de 500 y un máximo de 800 palabras del análisis de la base de datos, describiendo la base de datos, indicando la presencia de valores atípicos y las conclusiones a las que se abordó luego del análisis.</b>
+
+Las variables de la base de datos de vinos tienen las siguientes características:
+
+(se evalúa la dispersión viendo el coeficiente de variación y el gráfico, mientras que la curtosis suele servir para ver qué tan alta es la distribución, aunque no es confiable debido a los efectos de las colas)
+
+Acidez fija: el vino blanco tiene colas gruesas hacia la derecha e izquierda, mientras que el vino tinto presenta una cola gruesa hacia la derecha. El vino blanco tiene una dispersión relativamente baja mientras que el vino tinto muestra algo de dispersión. Ambos tienen un sesgo hacia la izquierda y son ligeramente leptocúrticas. El vino blanco parece mostrar una distribución normal.
+
+Acidez volátil: ambos tipos de vino tienen colas gruesas hacia la derecha. El vino blanco muestra una baja dispersión mientras que el tinto tiene algo de dispersión. El vino blanco tiene algo de sesgo hacia la izquierda. Ambas son leptocúrticas, aunque es más notorio en el vino blanco. El vino tinto parece tener dos modas aunque no es muy bien capturado por la función usada.
+
+Ácido cítrico: El vino blanco tiene colas gruesas hacia ambos lados, y hay un valor atípico hacia la derecha que está muy lejos del resto de la distribución. Tiene algo de dispersión, un poco de sesgo hacia la izquierda (el valor de curtosis puede que sea algo engañoso debido a la presencia de esas colas). El vino tinto tiene una distribución que se parece más a la exponencial, casi no presenta ningún sesgo.
+
+Azúcar residual del vino: ambos tipos de vino presentan colas gruesas hacia la derecha. En el caso del blanco hay algunos valores atípicos muy lejos del centro de la distribución. El vino tinto está algo disperso mientras que el blanco está muy disperso. Ambos presentan un sesgo hacia la izquierda y son leptocúrticas.
+
+Cloruros: Ambas distribuciones tienen colas gruesas bastante extensas hacia la derecha, muestran algo de dispersión (principalmente debido a las colas extensas), sesgo hacia la izquierda y son muy leptocúrticas.
+
+Anhídrido sulfuroso libre: El vino blanco está disperso, tiene una cola gruesa hacia la derecha un sesgo hacia la izquierda y no es muy alta (a pesar de tener una curtosis elevada, quizás por lo diferente que es de una normal). El vino tinto está algo disperso, tiene una cola hacia la derecha, un sesgo hacia la izquierda y es leptocúrtico.
+
+Anhídrido sulfuroso total: El vino blanco presenta colas hacia ambos lados, mientras que el tinto presenta una cola gruesa hacia la derecha. El vino tinto presenta un valor atípico extremo hacia la derecha. Ambos están algo dispersos. El vino blanco presenta poco sesgo y el tinto sesgo hacia la izquierda. El vino blanco es mesocúrtico mientras que el tinto leptocúrtico. El vino tinto luce como una distribución exponencial o una normal muy sesgada.
+
+Densidad: El vino blanco presenta dos valores atípicos hacia la derecha mientras que el tinto tiene colas gruesas hacia ambos lados. Ambos vinos presentan baja dispersión. El vino tinto tiene poco sesgo mientras que el blanco está un poco sesgado hacia la izquierda. Ambas son leptocúrticas (aunque en el tinto puede que sea más un artefacto de las colas).
+
+PH: El vino blanco tiene algo de cola hacia la derecha, el vino tinto tiene colas gruesas hacia ambos lados. Ambos tienen algo de dispersión, sesgo hacia la izquierda y son algo leptocúrticas.
+
+Sulfatos: Ambas distribuciones tienen colas gruesas hacia la derecha. El vino tinto tiene valores atípicos hacia la derecha. Tienen algo de dispersión, un poco de sesgo hacia la izquierda y son leptocúrticos. El vino blanco es multimodal, aunque no parece tener ninguna implicación mayor.
+
+Alcohol: El vino tinto parece tener un valor atípico pero no está demasiado lejos de la distribución. Están algo dispersos (aunque el coeficiente de variación no lo captura bien). Ambas distribuciones parecen similares, tienen un ligero sesgo hacia la izquierda y son mesocúrticas.
+
+Calidad: Ambos tienen poco sesgo y son mesocúrticos.
+
+Aparte de lo anterior, se puede concluir que: la mayoría de los vinos son de calidad intermedia (en base a la tabla de frecuencias elaborada en el punto 4), el PH y la acidez fija tienen relación (y probablemente también otro tipo de variables ácidas), el vino blanco es un poco mejor que el vino tinto y mientras más alcohol tenga el vino mayor tiene una calidad asociada mayor (aunque es cuestionable por qué se da esta relación).
+

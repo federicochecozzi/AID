@@ -1,0 +1,989 @@
+---
+title: "<BR><b><center>Maestría en exploración de datos y descubrimiento del conocimiento</center></b><BR><center>Trabajo práctico N°2: Análisis multivariado de datos</center>"
+author: "<BR><BR><BR><center>Autor: Federico Ricardo Checozzi</center>"
+date: "<BR><center>Fecha: 11 de julio de 2022</center><BR><BR><BR>"
+output: 
+  html_document:
+    theme: simplex
+    toc: true 
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Carga de librerías 
+```{r warning = FALSE, message = FALSE}
+library(vegan)
+library(corpcor)
+library(Hotelling)
+library(scatterplot3d)
+library(cluster)
+library(pracma)
+library(dendextend)
+library(mlr)
+library(klaR) 
+library(biotools)#sobreescribe Select de Tidyverse, cargar antes de Tidyverse para evitar problemas
+library(mvnormtest)
+library(rsample)
+library(ggfortify)
+library(corrplot)
+library(readxl)
+library(GGally)
+library(knitr)
+library(tidyverse)
+```
+# Carga y muestreo de la base de datos
+
+## Cargado
+
+El cargado de datos es bastante directo, se convierte la columna con las variedades de tinto a un factor para facilitar el análisis posterior:
+```{r}
+wine_data <- read_excel("DatosTP1.xlsx") %>% 
+              mutate(variedad = factor(variedad)) %>% 
+              mutate(variedad = fct_recode(variedad, 'Blanco' = '1','Tinto' = '2'))
+```
+## Muestreo
+
+<b>A.- Para la base de datos seleccionada genere una muestra aleatoria estratificada y balanceada por variedad de vino de tamaño n = 2000 utilizando como semilla los últimos tres dígitos del DNI/PASAPORTE.</b>
+
+El muestreo se realizó con la función slice_sample de dplyr aplicada a cada variedad de vino por separado. Hay que tener cuidado de desagrupar los datos porque genera dificultades a la hora de seleccionar variables más tarde (resulta que un factor que identifica a un grupo no puede ser eliminado).
+
+```{r}
+set.seed(311)
+
+wine <- wine_data %>%
+        group_by(variedad) %>%
+        slice_sample(n = 1000) %>%
+        ungroup()
+```
+
+En algunas situaciones es conveniente tener separada variedad del resto de las variables, por eso se crea un tibble con todas las variables numéricas y se almacena por separado los valores de variedad:
+
+```{r}
+wine_numeric <- wine %>%  
+                select(where(is.numeric))
+variety <- wine$variedad
+```
+
+
+# Análisis de datos
+
+<b>B. De ahora en más trabaje con esta base de datos para el resto del trabajo práctico.Realice los procedimientos que se detallan a continuación acompañando los procedimientos de los gráficos que considere adecuados.</b>
+
+Al convertir el tibble de ancho a largo como un paso intermedio, es más sencillo usar los nombres de variables como factores al escribir código (variedad permanece en su estado original, ya que es útil como factor):
+
+```{r}
+wine_longer <- wine %>%
+  pivot_longer(!variedad,names_to = 'variable',values_to = 'valor')
+```
+
+## Gráficos:
+
+Tema general para los gráficos:
+
+```{r}
+theme <- theme(text = element_text(size=10),plot.title = element_text(size=12, face="bold.italic",
+               hjust = 0.5), axis.title.x = element_text(size=10, face="bold", colour='black'),
+               axis.title.y = element_text(size=10, face="bold"),panel.border = element_blank(),
+               panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(face="bold"))
+```
+
+Esquema de colores general para los gráficos:
+
+```{r}
+wine_color = c("antiquewhite","deeppink4")
+color_scale = scale_color_manual(name="variedad",values=wine_color)
+fill_scale = scale_fill_manual(name="variedad",values=wine_color)
+```
+
+
+### Gráfico a pares:
+
+```{r}
+wine %>% ggpairs(columns = colnames(wine_numeric), labeller = label_wrap_gen(10), legend = 1,
+          aes(color = variedad, fill = variedad, alpha = 0.1),
+          lower = list(continuous = "points", combo = "dot"), 
+          upper  = list(continuous = "blank"))+ theme(legend.position = "right") +
+          color_scale + fill_scale + theme
+```
+
+### Boxplot:
+
+En formato largo, no es complicado obtener los boxplots (se asigna un gráfico por cada combinación de variable numérica y variedad de vino con facet_wrap, de manera de obtener los 12 gráficos posibles en una grilla de 4X3):
+
+```{r}
+wine_longer %>%
+  ggplot(aes(y = valor, x = variedad, fill = variedad, alpha = 0.1)) +
+  geom_boxplot() + 
+  facet_wrap(~variable, ncol = 4, nrow = 3, scales = 'free') + 
+  xlab("") +
+  ylab("") +
+  fill_scale + theme
+```
+
+## Normalidad univariada:
+
+En formato largo, no es complicado obtener los qqplots (se asigna un gráfico por cada combinación de variable numérica y variedad de vino con facet_wrap, de manera de obtener los 24 gráficos posibles en una grilla de 6X4):
+
+```{r}
+wine_longer %>%
+  ggplot(aes(sample = valor, color = variedad)) +
+  geom_qq() + 
+  geom_qq_line(color = 'black') + 
+  facet_wrap(~variable + variedad, ncol = 6, nrow = 4, scales = 'free') + 
+  xlab("") +
+  ylab("") +
+  color_scale + theme
+```
+
+También se puede hacer una tabla de p-valores calculados por cada combinación de variable numérica y tipo de vino para hilar fino:
+
+```{r message = FALSE}
+wine_longer %>%
+  group_by(variedad, variable) %>% 
+  summarise(pvalor = shapiro.test(valor)$p.value) %>% kable(digits = 12)
+```
+
+## Normalidad multivariada:
+
+Se realiza el test de normalidad multivariada para cada variedad de tinto:
+```{r}
+wine %>%
+  filter(variedad == 'Blanco') %>%
+  select(where(is.numeric)) %>%
+  t() %>% mshapiro.test()
+
+wine %>%
+  filter(variedad == 'Tinto') %>%
+  select(where(is.numeric)) %>%
+  t() %>% mshapiro.test()
+```
+
+## Homocedasticidad:
+
+Homogeneidad de varianzas y covarianzas:
+
+```{r}
+boxM(data = wine_numeric, grouping = variety)
+```
+
+Homogeneidad de varianzas y covarianzas, pero robusto a la falta de normalidad:
+
+```{r warning = FALSE}
+test_levene <- wine_numeric %>% 
+                dist(method = 'euclidean') %>%
+                vegan::betadisper(variety, type = c("median","centroid"), bias.adjust = T,sqrt.dist = FALSE, add = FALSE) %>%
+                anova()
+cat(paste("p-value <",test_levene$`Pr(>F)`[1]))
+```
+
+
+## Comparación de vectores de medias:
+
+Hotelling, distribución normal asintótica de medias:
+
+```{r}
+print(hotelling.test(.~ variedad, data = wine))
+```
+
+El equivalente no paramétrico posee las mismas dificultades que (por ejemplo) leveneTest, al requerir una fórmula extensa que incluya todas las variables, así que no se realiza en este trabajo.
+
+# Análisis de componentes principales
+
+<b>1.- Aplique el Análisis de Componentes Principales a la base de datos. Presente los resultados y gráficos que considere adecuados. Interprete los resultados.</b>
+
+Como las variables son todas de naturaleza heterogénea en la base de datos de vinos, se las escalará previo a realizar el análisis:
+
+```{r}
+pca <- wine_numeric %>% 
+  prcomp(scale = TRUE) #center = TRUE por defecto
+```
+
+## Criterio de Kaiser
+
+Se utiliza como criterio de selección de número de componentes el criterio de Kaiser (varianza explicada requiere más componentes, pero como se puede ver más adelante, funciona bien inclusive solo con dos):
+
+```{r}
+screeplot(pca, type = "l", npcs = 12)
+abline(h = 1, col="red", lty=5)
+legend("topright", legend=c("Autovalor = 1"),
+       col=c("red"), lty=5, cex=0.6)
+```
+
+Basta con tres componentes principales.
+
+## Varianza explicada
+
+Aunque no se utiliza para elegir el número de componentes, es útil para ver la varianza explicada por las componentes seleccionadas:
+
+```{r}
+prop_variance <- pca$sdev^2 / sum(pca$sdev^2)
+prop_variance_cum <- cumsum(prop_variance)
+
+ggplot(data = data.frame(prop_variance_cum, pc = 1:12), 
+       aes(x = pc, y = prop_variance_cum, group = 1)) +
+  geom_col(width = 0.3, fill = 'slateblue3') +
+  theme_bw() +
+  labs(x = "Componente principal",
+       y = "Prop. varianza explicada acumulada")
+
+```
+
+## Contribución de variables
+
+Uno de los primeros aspectos a analizar es la contribución de cada variable numérica a las componentes principales:
+
+```{r}
+kable(round(pca$rotation,2))
+```
+
+Resulta un poco más sencillo ver la influencia de las variables mediante corrplot:
+
+```{r}
+contrib <- as.matrix(round(pca$rotation,2))
+corrplot(contrib,is.corr=FALSE)
+```
+
+## Biplot
+
+Gráfico con proyección bidimensional de los datos y contribución de las variables a las dos primeras componentes:
+
+```{r warning = FALSE}
+autoplot(pca, data = wine, colour = 'variedad', alpha = 0.5, loadings = TRUE, 
+         loadings.colour = 'black', loadings.label = TRUE, loadings.label.size = 3) +
+color_scale + theme + 
+labs(title='Análisis de componentes principales') + xlim(c(-0.08,0.08)) + ylim(c(-0.08,0.08))
+```
+
+# Análisis Discriminante
+
+<b>2.- Realice el Análisis Discriminante para clasificar los vinos según la variable variedad de vino. Interprete los resultados.</b>
+
+## Separación en entrenamiento y prueba
+
+Este paso es necesario al ser un método de clasificación supervisada, se utiliza initial_split de la librería rsample:
+
+```{r}
+wine_split <- wine %>% 
+                initial_split(prop = 0.7, strata = variedad)
+wine_train <- wine_split %>% 
+                training()
+wine_test  <- wine_split %>% 
+                testing()
+```
+
+Se guarda también las variables numéricas y variedad por separado para facilitar otras partes del trabajo:
+
+```{r}
+wine_train_numeric <- wine_train %>% 
+                        select(where(is.numeric))
+variety_train <- wine_train$variedad
+
+wine_test_numeric <- wine_test %>% 
+                        select(where(is.numeric))
+variety_test <- wine_test$variedad
+```
+
+## Análisis Discriminante Lineal
+
+```{r}
+#lda requiere MASS que está dentro de biotools
+model_lda <- lda(variedad~., data = wine_train)
+```
+
+### Contribuciones de cada variable a la función discriminante
+
+```{r}
+tibble(variable = colnames(wine_numeric), LD1 = as.vector(model_lda$scaling)) %>%
+                                                                              kable()
+```
+
+### Distribución de los resultados de la función discriminante:
+
+No se puede hacer un gráfico bidimensional dada la restricción que impone la cantidad de clases al número de funciones discriminantes, aunque es posible ver cómo se distribuyen los resultados:
+
+```{r}
+tibble(LD1 = predict(model_lda)$x, variedad = variety_train) %>%
+  ggplot() +
+  geom_density(aes(LD1, fill = variedad), alpha = 0.3) +
+  fill_scale + theme + 
+  labs(title='Distribución de los resultados de la función discriminante') + ylab('Densidad')
+```
+
+### Gráfico de partición
+
+Se incluye el código para generar el gráfico de partición e imprimirlo en una ventana nueva, aunque no es apropiado para una página web.
+
+```{r eval = FALSE}
+X11(width=15, height=15)
+partimat(wine_train_numeric,variety_train, method="lda", mar=c(1,4,1,2))
+```
+
+
+### Matrices de confusión
+
+Entrenamiento:
+
+```{r}
+kable(table(predict(model_lda,type="class")$class,variety_train))
+```
+
+Prueba:
+
+```{r}
+kable(table(predict(model_lda,wine_test)$class,variety_test))
+```
+
+### Métricas
+
+Se calcula accuracy tanto para entrenamiento como para prueba:
+
+```{r}
+acclda_ <- round(measureACC(variety_train, predict(model_lda,type="class")$class),3)
+acclda <- round(measureACC(variety_test, predict(model_lda,wine_test)$class),3)
+
+Metric <- c('valor','datos')
+Accuracy <- c(acclda,'prueba')
+Accuracy. <- c(acclda_,'entrenamiento')
+
+kable(rbind(Metric, Accuracy, Accuracy.))
+```
+
+
+## Análisis Discriminante Cuadrático
+
+```{r}
+model_qda <- qda(variedad~., data = wine_train)
+```
+
+### Matrices de confusión
+
+Entrenamiento:
+
+```{r}
+kable(table(predict(model_qda,type="class")$class,variety_train))
+```
+
+Prueba:
+
+```{r}
+kable(table(predict(model_qda,wine_test)$class,variety_test))
+```
+
+### Métricas
+
+```{r}
+accqda_ <- round(measureACC(variety_train, predict(model_qda,type="class")$class),3)
+accqda <- round(measureACC(variety_test, predict(model_qda,wine_test)$class),3)
+
+Metric <- c('valor','datos')
+Accuracy <- c(accqda,'prueba')
+Accuracy. <- c(accqda_,'entrenamiento')
+
+kable(rbind(Metric, Accuracy, Accuracy.))
+```
+
+# Máquinas de vectores de soporte
+
+<b>3.- Aplique el algoritmo SVM al conjunto de datos. Interprete los resultados.</b>
+
+## Escalado de los datos y formateo de los nombres de variable
+
+Se crean tibbles con las columnas numéricas normalizadas, de manera de que sean adecuadas para los algoritmos en secciones posteriores. También se cambia los nombres de variable (reemplazando espacios en blanco por puntos y removiendo acentos) para que puedan ser utilizados por la librería mlr sin complicaciones:
+
+```{r}
+wine_scaled <- wine_numeric %>% 
+                mutate_all(~(scale(.) %>% as.vector)) %>% 
+                rename_with(~ (iconv(make.names(.),to="ASCII//TRANSLIT"))) %>% 
+                add_column(variedad = variety)
+        
+
+wine_train_scaled <- wine_train_numeric %>%
+                      mutate_all( ~(scale(.) %>% as.vector)) %>% 
+                      rename_with(~ (iconv(make.names(.),to="ASCII//TRANSLIT"))) %>% 
+                      add_column(variedad = variety_train)
+
+wine_test_scaled <- wine_test_numeric %>% 
+                      mutate(across(everything(), 
+                                    ~(scale(.,
+                                            center = mean(wine_train_numeric[[cur_column()]]),
+                                            scale = sd(wine_train_numeric[[cur_column()]])
+                                            ) %>% as.vector))) %>% 
+                      rename_with(~ (iconv(make.names(.),to="ASCII//TRANSLIT"))) %>% 
+                      add_column(variedad = variety_test)
+```
+
+## Kernel lineal
+
+### Entrenamiento y predicción
+
+Se utiliza la implementación de mlr de svm (aunque fue abandonada por los desarrolladores, a futuro debería utilizarse mlr3) para entrenar el clasificador y realizar predicciones sobre el conjunto de prueba y entrenamiento (predicción ingenua):
+
+```{r warning = FALSE}
+task = makeClassifTask(data = wine_train_scaled, target = "variedad") 
+lrn_svm1 = makeLearner("classif.svm", predict.type = "prob", par.vals = list( kernel = "linear", cost = 2)) 
+mod_svm1 = mlr::train(lrn_svm1, task)
+
+pred_svm1 = predict(mod_svm1, newdata = wine_test_scaled) 
+acc_svm1 <- round(measureACC(as.data.frame(pred_svm1)$truth, as.data.frame(pred_svm1)$response),3)
+AUC_svm1_test <- round(measureAUC(as.data.frame(pred_svm1)$prob.Blanco,as.data.frame(pred_svm1)$truth, "Tinto","Blanco"),3)
+
+pred_svm_1 = predict(mod_svm1, newdata = wine_train_scaled) 
+acc_svm_1 <- round(measureACC(as.data.frame(pred_svm_1)$truth, as.data.frame(pred_svm_1)$response),3)
+AUC_svm1_train <- round(measureAUC(as.data.frame(pred_svm_1)$prob.Blanco,as.data.frame(pred_svm_1)$truth, "Tinto","Blanco"),3)
+```
+
+### Accuracy vs. Threshold
+
+Se grafica cómo varía la performance del clasificador en función del umbral con el cual se decide la clase:
+
+```{r}
+acc=NULL
+acc2=NULL
+threshold = seq(0.1,0.95,0.01)
+for (i in 1:length(threshold)) {
+  pred = setThreshold(pred_svm1, threshold = threshold[i])
+  acc[i] = measureACC(as.data.frame(pred)$truth, as.data.frame(pred)$response)}
+for (i in 1:length(threshold)) {
+  pred2 = setThreshold(pred_svm_1, threshold = threshold[i])
+  acc2[i] = measureACC(as.data.frame(pred2)$truth, as.data.frame(pred2)$response)}
+par(mfcol = c(1,2))
+
+new_df1 <- as.data.frame(cbind(threshold,acc))
+new_df1 <- new_df1%>%mutate(sub_data='test')
+new_df2 <- as.data.frame(cbind(threshold,acc2))
+colnames(new_df2) <- c('threshold','acc')
+new_df2 <- new_df2%>%mutate(sub_data='train')
+
+new_df <- as.data.frame(rbind(new_df1,new_df2))
+
+ggplot(new_df, aes(x=threshold, y=acc)) + geom_line(aes(color = sub_data,linetype=sub_data)) +
+  labs(x='Umbral', y='Métrica de performance (accuracy)', 
+              title= 'Evaluación del modelo de Máquinas de soporte vectorial SVM') +
+  scale_color_manual(values = c("red", "darkred"),labels=c('prueba','entrenamiento')) +
+  scale_linetype_manual(values=c(1,2), labels=c('prueba','entrenamiento')) + 
+  labs(color='Conjunto de\n evaluación',linetype='Conjunto de\n evaluación')
+```
+
+### Curvas ROC
+
+```{r}
+df_svm = generateThreshVsPerfData(list(svm_te = pred_svm1, svm_tr = pred_svm_1), 
+                                  measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_svm) +
+  labs(title='Curva ROC del modelo de Máquinas de soporte vectorial SVM kernel lineal', 
+       x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)',
+       color='Conjunto de\n evaluación') +
+  scale_color_manual(values = c("red", "darkred"), labels=c('prueba','entrenamiento'))
+```
+
+### Matrices de confusión
+
+Entrenamiento:
+
+```{r}
+kable(table(as.data.frame(pred_svm_1)$response,as.data.frame(pred_svm_1)$truth))
+```
+
+Prueba:
+
+```{r}
+kable(table(as.data.frame(pred_svm1)$response,as.data.frame(pred_svm1)$truth))
+```
+
+### Varias métricas
+
+```{r}
+Metric <- c('valor','datos')
+Accuracy <- c(acc_svm1,'prueba')
+Accuracy. <- c(acc_svm_1,'entrenamiento')
+AUC_ROC <- c(AUC_svm1_test,'prueba')
+AUC_ROC. <- c(AUC_svm1_train,'entrenamiento')
+
+kable(rbind(Metric, Accuracy, Accuracy., AUC_ROC, AUC_ROC.))
+```
+
+## Kernel sigmoide
+
+### Entrenamiento y predicción
+
+```{r warning = FALSE}
+task = makeClassifTask(data = wine_train_scaled, target = "variedad") 
+lrn_svm2 = makeLearner("classif.svm", predict.type = "prob", par.vals = list( kernel = "sigmoid", cost = 2)) 
+mod_svm2 = mlr::train(lrn_svm2, task)
+
+pred_svm2 = predict(mod_svm2, newdata = wine_test_scaled) 
+acc_svm2 <- round(measureACC(as.data.frame(pred_svm2)$truth, as.data.frame(pred_svm2)$response),3)
+AUC_svm2_test <- round(measureAUC(as.data.frame(pred_svm2)$prob.Blanco,as.data.frame(pred_svm2)$truth, "Tinto","Blanco"),3)
+
+pred_svm_2 = predict(mod_svm2, newdata = wine_train_scaled) # por si quiero ver naive sobre training
+acc_svm_2 <- round(measureACC(as.data.frame(pred_svm_2)$truth, as.data.frame(pred_svm_2)$response),3)
+AUC_svm2_train <- round(measureAUC(as.data.frame(pred_svm_2)$prob.Blanco,as.data.frame(pred_svm_2)$truth, "Tinto","Blanco"),3)
+
+```
+
+### Accuracy vs. Threshold
+
+```{r}
+acc=NULL
+acc2=NULL
+threshold = seq(0.1,0.95,0.01)
+for (i in 1:length(threshold)) {
+  pred = setThreshold(pred_svm2, threshold = threshold[i])
+  acc[i] = measureACC(as.data.frame(pred)$truth, as.data.frame(pred)$response)}
+for (i in 1:length(threshold)) {
+  pred2 = setThreshold(pred_svm_2, threshold = threshold[i])
+  acc2[i] = measureACC(as.data.frame(pred2)$truth, as.data.frame(pred2)$response)}
+par(mfcol = c(1,2))
+
+new_df1 <- as.data.frame(cbind(threshold,acc))
+new_df1 <- new_df1%>%mutate(sub_data='test')
+new_df2 <- as.data.frame(cbind(threshold,acc2))
+colnames(new_df2) <- c('threshold','acc')
+new_df2 <- new_df2%>%mutate(sub_data='train')
+
+new_df <- as.data.frame(rbind(new_df1,new_df2))
+
+ggplot(new_df, aes(x=threshold, y=acc)) + geom_line(aes(color = sub_data,linetype=sub_data)) +
+  labs(x='Umbral', y='Métrica de performance (accuracy)', 
+       title= 'Evaluación del modelo de Máquinas de soporte vectorial SVM') +
+  scale_color_manual(values = c("red", "darkred"),labels=c('prueba','entrenamiento')) +
+  scale_linetype_manual(values=c(1,2), labels=c('prueba','entrenamiento')) + 
+  labs(color='Conjunto de\n evaluación',linetype='Conjunto de\n evaluación')
+```
+
+### Curvas ROC
+
+```{r}
+df_svm = generateThreshVsPerfData(list(svm_te = pred_svm2, svm_tr = pred_svm_2), 
+                                  measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_svm) +
+  labs(title='Curva ROC del modelo de Máquinas de soporte vectorial SVM kernel sigmoideo', 
+       x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)',
+       color='Conjunto de\n evaluación') +
+  scale_color_manual(values = c("red", "darkred"), labels=c('prueba','entrenamiento'))
+```
+
+### Matrices de confusión
+
+Entrenamiento:
+
+```{r}
+kable(table(as.data.frame(pred_svm_2)$response,as.data.frame(pred_svm_2)$truth))
+```
+
+Prueba:
+
+```{r}
+kable(table(as.data.frame(pred_svm2)$response,as.data.frame(pred_svm2)$truth))
+```
+
+### Varias métricas
+
+```{r}
+Metric <- c('valor','datos')
+Accuracy <- c(acc_svm2,'prueba')
+Accuracy. <- c(acc_svm_2,'entrenamiento')
+AUC_ROC <- c(AUC_svm2_test,'prueba')
+AUC_ROC. <- c(AUC_svm2_train,'entrenamiento')
+
+kable(rbind(Metric, Accuracy, Accuracy., AUC_ROC, AUC_ROC.))
+```
+
+## Kernel radial
+
+### Entrenamiento y predicción
+
+```{r warning = FALSE}
+task = makeClassifTask(data = wine_train_scaled, target = "variedad") 
+lrn_svm3 = makeLearner("classif.svm", predict.type = "prob", par.vals = list( kernel = "radial", cost = 2)) 
+mod_svm3 = mlr::train(lrn_svm3, task)
+
+pred_svm3 = predict(mod_svm3, newdata = wine_test_scaled) 
+acc_svm3 <- round(measureACC(as.data.frame(pred_svm3)$truth, as.data.frame(pred_svm3)$response),3)
+AUC_svm3_test <- round(measureAUC(as.data.frame(pred_svm3)$prob.Blanco,as.data.frame(pred_svm3)$truth, "Tinto","Blanco"),3)
+
+pred_svm_3 = predict(mod_svm3, newdata = wine_train_scaled) # por si quiero ver naive sobre training
+acc_svm_3 <- round(measureACC(as.data.frame(pred_svm_3)$truth, as.data.frame(pred_svm_3)$response),3)
+AUC_svm3_train <- round(measureAUC(as.data.frame(pred_svm_3)$prob.Blanco,as.data.frame(pred_svm_3)$truth, "Tinto","Blanco"),3)
+
+```
+
+### Accuracy vs. Threshold
+
+```{r}
+acc=NULL
+acc2=NULL
+threshold = seq(0.1,0.95,0.01)
+for (i in 1:length(threshold)) {
+  pred = setThreshold(pred_svm3, threshold = threshold[i])
+  acc[i] = measureACC(as.data.frame(pred)$truth, as.data.frame(pred)$response)}
+for (i in 1:length(threshold)) {
+  pred2 = setThreshold(pred_svm_3, threshold = threshold[i])
+  acc2[i] = measureACC(as.data.frame(pred2)$truth, as.data.frame(pred2)$response)}
+par(mfcol = c(1,2))
+
+new_df1 <- as.data.frame(cbind(threshold,acc))
+new_df1 <- new_df1%>%mutate(sub_data='test')
+new_df2 <- as.data.frame(cbind(threshold,acc2))
+colnames(new_df2) <- c('threshold','acc')
+new_df2 <- new_df2%>%mutate(sub_data='train')
+
+new_df <- as.data.frame(rbind(new_df1,new_df2))
+
+ggplot(new_df, aes(x=threshold, y=acc)) + geom_line(aes(color = sub_data,linetype=sub_data)) +
+  labs(x='Umbral', y='Métrica de performance (accuracy)', 
+       title= 'Evaluación del modelo de Máquinas de soporte vectorial SVM') +
+  scale_color_manual(values = c("red", "darkred"),labels=c('prueba','entrenamiento')) +
+  scale_linetype_manual(values=c(1,2), labels=c('prueba','entrenamiento')) + 
+  labs(color='Conjunto de\n evaluación',linetype='Conjunto de\n evaluación')
+```
+
+### Curvas ROC
+
+```{r}
+df_svm = generateThreshVsPerfData(list(svm_te = pred_svm3, svm_tr = pred_svm_3), 
+                                  measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_svm) +
+  labs(title='Curva ROC del modelo de Máquinas de soporte vectorial SVM kernel radial', 
+       x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)',
+       color='Conjunto de\n evaluación') +
+  scale_color_manual(values = c("red", "darkred"), labels=c('prueba','entrenamiento'))
+```
+
+### Matrices de confusión
+
+Entrenamiento:
+
+```{r}
+kable(table(as.data.frame(pred_svm_3)$response,as.data.frame(pred_svm_3)$truth))
+```
+
+Prueba:
+
+```{r}
+kable(table(as.data.frame(pred_svm3)$response,as.data.frame(pred_svm3)$truth))
+```
+
+### Varias métricas
+
+```{r}
+Metric <- c('valor','datos')
+Accuracy <- c(acc_svm3,'prueba')
+Accuracy. <- c(acc_svm_3,'entrenamiento')
+AUC_ROC <- c(AUC_svm3_test,'prueba')
+AUC_ROC. <- c(AUC_svm3_train,'entrenamiento')
+
+kable(rbind(Metric, Accuracy, Accuracy., AUC_ROC, AUC_ROC.))
+```
+
+## Comparaciones entre los tres kernels
+
+### Métricas y predicciones
+
+Se realizan predicciones sobre todo el conjunto de datos en base a entrenamiento:
+
+```{r warning = FALSE}
+SVM_metrics1 <- calculateROCMeasures(pred_svm1)
+SVM_metrics2 <- calculateROCMeasures(pred_svm2)
+SVM_metrics3 <- calculateROCMeasures(pred_svm3)
+
+pred_todos=NULL
+pred_all_svm1 <- as.data.frame(predict(mod_svm1, newdata = wine_scaled))
+pred_all_svm2 <- as.data.frame(predict(mod_svm2, newdata = wine_scaled))
+pred_all_svm3 <- as.data.frame(predict(mod_svm3, newdata = wine_scaled))
+```
+
+
+### Representación en el espacio de componentes principales del kernel radial
+
+```{r warning = FALSE}
+autoplot(pca, data = wine %>% add_column(svm3 = factor(pred_all_svm3$response)), colour = 'svm3' , loadings = TRUE, 
+         loadings.colour = 'black', loadings.label = TRUE, loadings.label.size = 3) +
+  color_scale + theme + 
+  labs(title='Representación de las predicciones ingenuas del modelo SVM (r)\nen las componentes principales 1 y 2') + xlim(c(-0.08,0.08))
+
+```
+
+### Curvas ROC
+
+```{r}
+df_all = generateThreshVsPerfData(list(svm1 = pred_svm1,
+                                       svm2 = pred_svm2,
+                                       svm3 = pred_svm3), measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_all) +  
+  labs(title='Curvas ROC de modelos de clasificación supervisada (datos de prueba)',
+       x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)', 
+       color=' Modelo en\n evaluación') +
+  scale_color_manual(values = c("red", "blue", "darkgreen"),
+                     labels=c('SVM (l)','SVM (s)','SVM (r)'))+
+  theme(legend.position=c(0.915,0.25))
+```
+
+### Comparación AUC
+
+```{r}
+AUC_values <- rbind(AUC_svm1_test,AUC_svm2_test,AUC_svm3_test)
+AUC_values <- as.data.frame(AUC_values)
+AUC_values$Modelo <- c('SVM (l)','SVM (s)','SVM (r)')
+colnames(AUC_values) <- c('Area debajo de la curva (AUC)','Modelo')
+row.names(AUC_values) <- NULL
+AUC_values <- AUC_values %>% select(2,1)
+kable(AUC_values)
+```
+
+# Comparación de métricas de métodos supervisados
+
+Se crea una tabla de accuracy mediante tribble, que permite crear un tibble por filas (es un reemplazo cómodo para cbind y rbind):
+
+```{r}
+accuracy_table <- tribble(
+                          ~Clasificador  ,~Valor    ,~Datos          ,
+                          "LDA"          , acclda_  , 'entrenamiento',
+                          "LDA"          , acclda   , 'prueba'       ,
+                          "QDA"          , accqda_  , 'entrenamiento',
+                          "QDA"          , accqda   , 'prueba'       ,
+                          "SVM lineal"   , acc_svm_1, 'entrenamiento',
+                          "SVM lineal"   , acc_svm1 , 'prueba'       ,
+                          "SVM sigmoide" , acc_svm_2, 'entrenamiento',
+                          "SVM sigmoide" , acc_svm2 , 'prueba'       ,
+                          "SVM radial"   , acc_svm_3, 'entrenamiento',
+                          "SVM radial"   , acc_svm3 , 'prueba'
+                        )
+
+kable(accuracy_table)
+
+```
+
+
+# Clasificación jerárquica
+
+<b>4.- Elija un método de Clasificación jerárquico y aplíquelo a los datos. Interprete los resultados.</b>
+
+## Clustering
+
+Como se está manejando atributos numéricos, se utiliza la distancia euclidiana para calcular la matriz de distancias. La distancia entre clústeres se calculó con el método de Ward (al final del trabajo se explica la intuición detrás de esa decisión). Se utilizaron dos grupos. No se utilizó una muestra pequeña de la base de datos. Las distancias se calculan sobre los datos normalizados para lidiar con la heterogeneidad de los datos.
+
+```{r}
+n_clusters = 2
+mat_dist <- dist(x = wine_scaled %>% select(-variedad), method = "euclidean") 
+hc_ward <- hclust(d = mat_dist, method = "ward.D2")
+hier_ward<-cutree(hc_ward,k=n_clusters)
+cat(paste("La distancia cofenética es",round(cor(x = mat_dist, cophenetic(hc_ward)),3)))
+```
+
+## Dendrograma
+
+El dendrograma funciona bien a pesar del número grande de observaciones analizadas:
+
+```{r}
+mar = c(5.1, 4.1, 4.1, 2.1) 
+pch = wine_color
+cols=alpha(pch[variety[order.dendrogram(as.dendrogram(hc_ward))]],0.7)
+dend_ward <- color_branches(as.dendrogram(hc_ward), k = 2)
+dend_ward <- set(dend_ward, "labels_cex", 0.1)
+grafico1 <- dend_ward %>%  set("leaves_pch",19)%>%
+  set("leaves_cex", .9) %>% set("leaves_col", cols) %>% 
+  plot(main = "Dendrograma jerárquico", ylab='Distancia',cex.lab=1, cex.axis=.6)+
+  mtext(side = 3, line = 0.5, at = 1, adj = -1.8, 'Distancia Ward')+
+  mtext(side = 1, line = 0.5, at = 1, adj = -4.1, 'Vino')
+legend(5,75, title='Diagnóstico', 
+       legend = c("Blanco" , "Tinto"), 
+       col = pch , 
+       pch = c(19,19), bty = "n",  pt.cex = 1.5, cex = 0.8 , 
+       text.col = "black", horiz = FALSE, inset = c(0, 0.1))
+```
+
+## Análisis de los clústeres
+
+Se analiza la relacion entre los clústeres y la variedad de vino:
+
+```{r}
+cluster_table <- table(hier_ward,variety, dnn = NULL)
+colnames(cluster_table) <- c('Blanco','Tinto')
+rownames(cluster_table) <- c('Clúster 1','Clúster 2')
+kable(cluster_table)
+```
+
+# Clasificación no jerárquica
+
+<b>5.- Aplique a los datos el método de clasificación no jerárquico K-means. Interprete los resultados.</b>
+
+## Curva de suma de errores cuadrados y silueta
+
+El código es parecido al compartido en las clases, aunque se hace mejor uso de tidyr para crear el tibble necesario para las curvas y se recortan algunas funciones innecesarias para este trabajo:
+
+```{r}
+sil = array()
+sse = array()
+kmax = 10
+for ( i in  2:kmax) { 
+  CL  = kmeans(wine_scaled %>% select(-variedad),centers=i,nstart=50,iter.max = kmax)
+  sse[i]  = CL$tot.withinss 
+  CL_sil = silhouette(CL$cluster, mat_dist)
+  sil[i]  = summary(CL_sil)$avg.width
+}
+
+m1 = tibble(kcluster = seq(1,kmax), sse, sil)
+m1 <- m1 %>% 
+  drop_na() %>%
+  pivot_longer(cols = c('sse','sil'), names_to = 'metric', values_to = 'value')
+
+m1 %>% ggplot(aes(kcluster, value, linetype=metric)) + geom_line(col='red') + 
+        facet_wrap(~metric, ncol=1, scales='free') + geom_point(col='red', size=2, fill='pink', shape=21)+
+        labs(title='Determinación de número de clusters', 
+          x='k Número de clusters', y='Valor', linetype='Métrica')+
+        scale_x_continuous(breaks = seq(1, kmax, by = 1))+
+        scale_linetype_manual(values=c(1,2))
+```
+
+## K-medias con dos clústeres
+
+```{r}
+n_clusters = 2
+CL  = wine_scaled %>% 
+        select(-variedad) %>% 
+        kmeans(n_clusters,nstart=50,iter.max = kmax)
+```
+
+### Comparación visual con las variedades de vino
+
+```{r}
+par(mfrow=c(1,2))
+
+col1 <- c("antiquewhite","deeppink4")
+col1 <- col1[as.numeric(variety)]
+
+scatterplot3d(wine_scaled$pH,wine_scaled$azucar.residual,wine_scaled$anhidrido.sulfuroso.total, color = alpha(col1,0.1), box=F,angle=45, pch = 19, grid = TRUE, tick.marks = FALSE, xlab = "pH", ylab = "Azúcar Residual", zlab = "Anhídrido sulfuroso total", main='Realidad')
+legend("topright", bty = "n", cex = .9, title = "Diagnóstico", c("Blanco", "Tinto"), fill = c("antiquewhite","deeppink4"))
+
+colors <- c('orange','#a25da2a5')
+colors <- colors[as.numeric(CL$cluster)]
+
+scatterplot3d(wine_scaled$pH,wine_scaled$azucar.residual,wine_scaled$anhidrido.sulfuroso.total, color = alpha(colors,0.1), box=F,angle=45, pch = 19, grid = TRUE, tick.marks = FALSE, xlab = "pH", ylab = "Azúcar Residual", zlab = "Anhídrido sulfuroso total", main='Clustering')
+legend("topright", bty = "n", cex = .9, title = "Grupo k-means", c("1", "2"), fill = c('orange','#a25da2a5'))
+```
+
+### Representación en el espacio de componentes principales de los clústeres generados
+
+```{r warning = FALSE}
+autoplot(pca, data = wine %>% add_column(cluster = factor(CL$cluster)), colour = 'cluster' , loadings = TRUE, 
+         loadings.colour = 'black', loadings.label = TRUE, loadings.label.size = 3) +
+  scale_color_manual(name="cluster",values=c('orange','#a25da2a5'),labels=c("Clúster 1",'Clúster 2')) + 
+  labs(title='Representación del clustering usando K-medias') + xlim(c(-0.08,0.08)) + theme
+```
+
+
+### Análisis de los clústeres
+
+```{r}
+cluster_table2 <- table(CL$cluster,variety, dnn = NULL)
+colnames(cluster_table2) <- c('Blanco','Tinto')
+rownames(cluster_table2) <- c('Clúster 1','Clúster 2')
+kable(cluster_table2)
+```
+
+## K-medias con cinco clústeres
+
+```{r}
+n_clusters = 5
+CL  = wine_scaled %>% 
+        select(-variedad) %>% 
+        kmeans(n_clusters,nstart=50,iter.max = kmax)
+```
+
+### Comparación visual con las variedades de vino
+
+```{r}
+par(mfrow=c(1,2))
+
+col1 <- c("antiquewhite","deeppink4")
+col1 <- col1[as.numeric(variety)]
+
+scatterplot3d(wine_scaled$pH,wine_scaled$azucar.residual,wine_scaled$anhidrido.sulfuroso.total, color = alpha(col1,0.1), box=F,angle=45, pch = 19, grid = TRUE, tick.marks = FALSE, xlab = "pH", ylab = "Azúcar Residual", zlab = "Anhídrido sulfuroso total", main='Realidad')
+legend("topright", bty = "n", cex = .9, title = "Diagnóstico", c("Blanco", "Tinto"), fill = c("antiquewhite","deeppink4"))
+
+colors <- c('orange','#a25da2a5', 'blue', 'cyan', 'green')
+colors <- colors[as.numeric(CL$cluster)]
+
+scatterplot3d(wine_scaled$pH,wine_scaled$azucar.residual,wine_scaled$anhidrido.sulfuroso.total, color = alpha(colors,0.1), box=F,angle=45, pch = 19, grid = TRUE, tick.marks = FALSE, xlab = "pH", ylab = "Azúcar Residual", zlab = "Anhídrido sulfuroso total", main='Clustering')
+legend("topright", bty = "n", cex = .9, title = "Grupo k-means", c("1", "2","3", "4","5"), fill = c('orange','#a25da2a5', 'blue', 'cyan', 'green'))
+```
+
+### Representación en el espacio de componentes principales de los clústeres generados
+
+```{r warning = FALSE}
+autoplot(pca, data = wine %>% add_column(cluster = factor(CL$cluster)), colour = 'cluster' , loadings = TRUE, 
+         loadings.colour = 'black', loadings.label = TRUE, loadings.label.size = 3) +
+  scale_color_manual(name="cluster",values=c('orange','#a25da2a5', 'blue', 'cyan', 'green'),labels=c("Clúster 1",'Clúster 2',"Clúster 3",'Clúster 4',"Clúster 5")) + 
+  labs(title='Representación del clustering usando K-medias') + xlim(c(-0.08,0.08)) + theme
+```
+
+
+### Análisis de los clústeres
+
+```{r}
+cluster_table3 <- table(CL$cluster,variety, dnn = NULL)
+colnames(cluster_table3) <- c('Blanco','Tinto')
+rownames(cluster_table3) <- c("Clúster 1",'Clúster 2',"Clúster 3",'Clúster 4',"Clúster 5")
+kable(cluster_table3)
+```
+
+# Análisis de los resultados
+
+<b>C.- Presente un informe final de 2 carillas como máximo, no incluya gráficos, explicando las conclusiones del trabajo realizado, mencione si es necesario validar supuestos requeridos para aplicar el método. Compare los resultados de los métodos supervisados y establezca conclusiones. Por otro lado, compare los métodos no supervisados y presente sus conclusiones.</b>
+
+El análisis exploratorio realizado al comienzo del trabajo es en parte una repetición del primer trabajo práctico. Sin embargo, se pueden sacar algunas conclusiones útiles: 
+
+El gráfico por pares permite apreciar que la mayoría de las combinaciones de dos variables permite una discriminación entre las dos variedades de vino. La cantidad de alcohol, de ácido cítrico y la calidad no son muy buenas para clasificación debido al solapamiento de sus distribuciones para las dos variedades.
+
+Ninguna de las variables numéricas tiene una distribución normal. Eso necesariamente implica que se rechazará la hipótesis de normalidad multivariada. Se rechazó tanto la homocedasticidad como la igualdad entre los vectores medias de los atributos de los dos tipos de vinos.
+
+
+Al realizar un análisis por componentes principales, se utiliza el criterio de Kaiser por dos razones: la cantidad de componentes mínima recomendada es razonablemente pequeña y, al menos para este trabajo, funcionó razonablemente bien. 
+Elegir los tres primeros componentes llega a explicar dos tercios de la varianza (lo que puede parecer insuficiente), aunque como puede verse en el biplot, inclusive dos componentes son suficientes para poder generar dos clústeres distintivos correspondientes a cada variedad de vino. Componentes adicionales permitirían refinar el resultado. Uno puede concluir de este hecho que la varianza del base de datos condensa adecuadamente la información presente.
+
+Una posible interpretación de las componentes (a partir de lo que puede observarse en el corrplot tanto como del biplot) es: PC1 es principalmente influenciada por los anhídridos sulfurosos y en menor medida por la acidez volátil, por lo que puede entenderse a PC1 como “anhídridos”, PC2 es principalmente influenciada por densidad y alcohol por lo que puede entenderse como “contenido alcohólico” y PC3 es principalmente influenciada por el ácido cítrico. Igualmente son resultados que deberían tomarse con cierto escepticismo debido a que muchas otras variables tienen peso también.
+
+
+El análisis exploratorio muestra que no se cumplen los supuestos del análisis discriminante (normalidad multivariada) ni tampoco se cumple con la homocedasticidad. Sin embargo, es un muy buen clasificador en la práctica (el lineal funciona mejor que el cuadrático en este caso), y parece ser una buena idea considerarlo inclusive si se violan los supuestos.
+
+En el análisis discriminante lineal (y el cuadrático), se obtiene una sola dimensión debido que se pueden obtener como máximo un número de dimensiones igual al número de clases menos uno (no se necesitan más funciones discriminantes para poder clasificar observaciones adecuadamente). Lo que se puede observar de la distribución de los resultados de la función discriminante es que hay una muy buena separación entre ambas variedades de vino.
+Se me ocurren tres posibles explicaciones de por qué funcionan estos algoritmos a pesar de que no se cumplen los supuestos:
+
+La base de datos es trivial de separar en el espacio, por lo que no importa mucho las desviaciones de los supuestos.
+
+El análisis discriminante lineal funciona como una especie de perceptrón que resulta ser útil para este problema (este también genera un hiperplano).
+(probablemente la interpretación más interesante, aunque muy especulativa) El capítulo de clasificadores lineales del libro The Elements of Statistical Learning, de Hastie, Tibshirani y Friedman, afirma que una regresión que codifica las dos clases con diferentes valores puede utilizarse como un clasificador binario y que sus coeficientes son proporcionales a los del análisis discriminante lineal. Esto relajaría la suposición de normalidad multivariada (aunque la regresión tiene sus supuestos), porque indirectamente se estaría realizando esta regresión. También explicaría por qué el clasificador lineal funciona mejor que el cuadrático.
+
+
+Las máquinas de soporte vectorial resultaron ser muy precisas. Se observa que cambiar el umbral (threshold) de predicción puede reducir la precisión de clasificación; en este caso, valores alrededor de 0,5 funcionan bien en la práctica. Algo curioso pero que es probable que sea accidental es que los modelos generados a veces predicen mejor el conjunto de prueba que el de entrenamiento. 
+
+El kernel lineal presentó resultados mejores que el sigmoide, pero el radial es el mejor. Aún así, todos los métodos dan resultados similares, lo que hace sospechar que el problema de clasificación es trivial.
+
+
+De entre los métodos supervisados, el orden de peor a mejor (por accuracy) es SVM sigmoide, QDA, SVM lineal/LDA y SVM radial, aunque la diferencia es insignificante para los tres últimos.
+
+
+Mediante el análisis de conglomerados se logró recuperar los grupos originales correspondientes a cada variedad de vino mediante la elección correcta de los hiperparámetros del modelo. 
+
+La elección de la distancia euclídea y el número de grupos es obvia en este caso (debido a que se usan atributos numéricos y porque ya se sabe de antemano cuántos grupos se deben encontrar, aunque quizás debería hacerse una evaluación honesta del número de clústeres en trabajos futuros). 
+
+La elección de la distancia Ward para evaluar la distancia entre clústeres es menos obvia. Esta distancia busca minimizar la varianza en el interior de un clúster. También se conocido que una interpretación alternativa del análisis discriminante lineal, la de Fisher, define la separación entre dos grupos de observaciones como el coeficiente entre la varianza entre grupos y dentro de los grupos y busca una transformación que maximice la separación entre grupos. El hecho que el discriminante lineal funciona razonablemente bien permite sospechar que la minimizar la varianza dentro de cada clúster es la mejor opción.
+
+
+Para K-medias, el gráfico de suma de errores cuadrados muestra un decrecimiento monótono por lo que no es de mucha utilidad para estimar el número óptimo de clústeres. El ancho de silueta promedio muestra sus mejores resultados para cinco clústeres (recordar que valores cercanos a uno significan una separación adecuada, valores cercanos a cero son indiferentes y negativos indican una separación incorrecta).
+
+K-medias con dos clústeres aproximadamente recuperó los grupos originales. K-medias con cinco clústeres genera dos clústeres correspondientes a vino blanco y tres a tinto (aunque uno es un clúster prácticamente hecho de outliers. Aunque en principio se mezclan más los vinos de las dos variedades en cada clúster comparado con dos clústeres, esto no significa que los clústeres sean peores. Podría haber algún patrón oculto (¿quizás bajo ciertos valores de algunas de las variables?) que tenga sentido.
+
+
+De entre los métodos no supervisados, K-medias con dos clústeres es el que más se aproxima a recuperar los grupos originales, seguido por el método jerárquico. Aunque es más difícil elegir elegir los hiperparámetros del modelo jerárquico.
+
+
+Algo interesante para probar en trabajos futuros sería remover aquellas variables cuyas distribuciones se solapan demasiado entre diferentes variedades por considerarse que su poder de discriminación es bajo.
